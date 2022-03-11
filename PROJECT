@@ -1,0 +1,16 @@
+domain: artway.ai
+layout:
+- go.kubebuilder.io/v3
+projectName: artway-training
+repo: github.com/artway-ai/training
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: artway.ai
+  group: training
+  kind: TJob
+  path: github.com/artway-ai/training/api/v1
+  version: v1
+version: "3"

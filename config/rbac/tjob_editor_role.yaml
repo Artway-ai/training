@@ -1,0 +1,24 @@
+# permissions for end users to edit tjobs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tjob-editor-role
+rules:
+- apiGroups:
+  - training.artway.ai
+  resources:
+  - tjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - training.artway.ai
+  resources:
+  - tjobs/status
+  verbs:
+  - get

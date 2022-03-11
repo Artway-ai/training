@@ -1,0 +1,20 @@
+# permissions for end users to view tjobs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tjob-viewer-role
+rules:
+- apiGroups:
+  - training.artway.ai
+  resources:
+  - tjobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - training.artway.ai
+  resources:
+  - tjobs/status
+  verbs:
+  - get
