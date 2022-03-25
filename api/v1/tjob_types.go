@@ -22,6 +22,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const KIND = "TJob"
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -76,13 +78,13 @@ const (
 
 type TaskSpec struct {
 	// Replicas replica
-	Replicas int32 `json:"replicas"`
+	Replicas int `json:"replicas"`
 
 	// Requests set the minimal replicas of server to be run
-	Requests *int32 `json:"requests,omitempty"`
+	Requests *int `json:"requests,omitempty"`
 
 	// Requests set the maximal replicas of server to be run
-	Limits *int32 `json:"limits,omitempty"`
+	Limits *int `json:"limits,omitempty"`
 
 	// Template specifies the podspec of a server
 	Template corev1.PodTemplateSpec `json:"template,omitempty"`
@@ -115,11 +117,11 @@ type TJobSpec struct {
 
 	// CleanPodPolicy defines whether to clean pod after job finished, default Never
 	// +optional
-	CleanPodPolicy *CleanPolicy `json:"cleanPodPolicy,omitempty"`
+	CleanPodPolicy CleanPolicy `json:"cleanPodPolicy,omitempty"`
 
 	// Intranet defines the communication mode inter pods : PodIP, Service or Host
 	// +optional
-	Intranet *Intranet `json:"intranet,omitempty"`
+	Intranet Intranet `json:"intranet,omitempty"`
 
 	// Elastic indicates the elastic level
 	// +optional

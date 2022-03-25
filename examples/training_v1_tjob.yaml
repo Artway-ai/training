@@ -1,0 +1,20 @@
+apiVersion: training.artway.ai/v1
+kind: TJob
+metadata:
+  name: tjob-sample
+spec:
+  tasks:
+  - name: tt
+    replicas: 10
+    template:
+      spec:
+        containers:
+          - name: test
+            image: centos:7
+            imagePullPolicy: Always
+            command:
+            - sleep
+            args:
+            - 1d
+    
+    

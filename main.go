@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	trainingv1 "github.com/artway-ai/training/api/v1"
+
 	"github.com/artway-ai/training/controllers"
 	//+kubebuilder:scaffold:imports
 )
@@ -50,13 +51,17 @@ func init() {
 
 func main() {
 	var metricsAddr string
+	var namespace string
+	var initImage string
 	var enableLeaderElection bool
 	var probeAddr string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&namespace, "namespace", "", "The namespace the controller binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&initImage, "initImage", "docker.io/library/busybox:1", "The image used for init container, default to busybox")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -67,6 +72,7 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Namespace:              namespace,
 		MetricsBindAddress:     metricsAddr,
 		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
@@ -80,7 +86,11 @@ func main() {
 
 	if err = (&controllers.TJobReconciler{
 		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Config: &controllers.ReconcilerConfig{
+			InitImage: initImage,
+		},
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("training-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TJob")
 		os.Exit(1)

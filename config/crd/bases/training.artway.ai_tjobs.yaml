@@ -62,19 +62,16 @@ spec:
                     limits:
                       description: Requests set the maximal replicas of server to
                         be run
-                      format: int32
                       type: integer
                     name:
                       description: Name name the resource, validated by
                       type: string
                     replicas:
                       description: Replicas replica
-                      format: int32
                       type: integer
                     requests:
                       description: Requests set the minimal replicas of server to
                         be run
-                      format: int32
                       type: integer
                     template:
                       description: Template specifies the podspec of a server
