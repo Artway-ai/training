@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"reflect"
 	"time"
 
 	slog "log"
@@ -53,6 +52,7 @@ var (
 	finalizerName = "finalizers.artway.ai"
 
 	deleteCacheKey = "deleteall"
+	createCacheKey = "createall"
 )
 
 type ReconcilerConfig struct {
@@ -95,7 +95,6 @@ func (r *TJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	logr := log.FromContext(ctx)
 
 	tj := &tv1.TJob{}
-
 	if err := r.Get(ctx, req.NamespacedName, tj); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -115,180 +114,62 @@ func (r *TJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	// clean pod surplus
-	ct := map[string]int{}
-	for i, pod := range ctrlPods.Items {
-		n := getTaskName(tj.Name, pod.Name)
-		ct[n] += 1
-		if ct[n] > getTaskSpecByName(tj, n).Replicas {
-			slog.Println("do delete")
-			r.deleteResource(ctx, tj, &ctrlPods.Items[i])
-		}
+	if ret, err := r.cleanPods(ctx, tj, ctrlPods); ret {
+		return ctrl.Result{}, err
 	}
 
-	slog.Println("create svc")
-	if tj.Spec.Intranet == tv1.Service {
-		r.createService(ctx, tj, ctrlPods)
-	} else if tj.Spec.Intranet == tv1.HostNetwork {
-		//TODO(k)
+	if ret, err := r.createPods(ctx, tj); ret {
+		return ctrl.Result{RequeueAfter: time.Second * 2}, err
 	}
 
-	slog.Println("clean pods")
-	// clean pods
-	if needCleanPods(tj) && len(ctrlPods.Items) > 1 {
-		if _, exists := r.cache.Get(deleteCacheKey); exists {
-			return ctrl.Result{RequeueAfter: time.Second * 2}, nil
-		}
-		slog.Println("do clean")
-		if err := r.DeleteAllOf(ctx, &corev1.Pod{}, client.InNamespace(req.Namespace), client.MatchingFields{ctrlRefKey: req.Name}); err != nil {
-			r.cache.Set(deleteCacheKey, "0")
-			return ctrl.Result{}, nil
-		}
+	if ret, err := r.constructNetwork(ctx, tj, ctrlPods); ret {
+		return ctrl.Result{RequeueAfter: time.Second * 1}, err
 	}
 
-	slog.Println("create pods")
-	// create pods
-	for i, task := range tj.Spec.Tasks {
-		slog.Println("for")
-		diff := task.Replicas
-		if tj.Status.Tasks[task.Name] != nil {
-			diff = task.Replicas - len(tj.Status.Tasks[task.Name].Refs)
-		}
-		slog.Println("diff", diff)
-		if diff > 0 {
-			slog.Println("do craete")
-			if ret, err := r.createPods(ctx, tj, tj.Spec.Tasks[i], diff); ret {
-				return ctrl.Result{RequeueAfter: time.Second * 2}, err
-			}
-		} else if diff < 0 {
-			//TODO(k)
-		}
+	if ret, err := r.generateJobConfig(ctx, tj, ctrlPods); ret {
+		return ctrl.Result{RequeueAfter: time.Second * 1}, err
 	}
 
-	slog.Println("create cm")
-	// create cm
-	if isAllPodsReady(tj, ctrlPods) {
-		r.createConfigMap(ctx, tj, ctrlPods)
+	if ret, err := r.runPods(ctx, tj, ctrlPods); ret {
+		return ctrl.Result{RequeueAfter: time.Second * 1}, err
 	}
 
-	r.releasePods(ctx, tj, ctrlPods)
 	return ctrl.Result{}, nil
 }
 
-func (r *TJobReconciler) createPods(ctx context.Context, tj *tv1.TJob, ts *tv1.TaskSpec, count int) (bool, error) {
-	running := make(chan bool, 10)
-	completed := make(chan bool, count)
-	failed := make(chan error, count)
-	defer close(running)
-	defer close(completed)
-	defer close(failed)
-
-	for i := 0; i < count; i++ {
-		running <- true
-		go func() {
-			pod := buildPodTemplate(tj, ts)
-			if err := ctrl.SetControllerReference(tj, pod, r.Scheme); err != nil {
-				failed <- err
-				return
+func (r *TJobReconciler) finalize(ctx context.Context, tj *tv1.TJob) (bool, error) {
+	if tj.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !containsString(tj.ObjectMeta.Finalizers, finalizerName) {
+			tj.ObjectMeta.Finalizers = append(tj.ObjectMeta.Finalizers, finalizerName)
+			if err := r.Update(ctx, tj); err != nil {
+				return true, err
 			}
-			if err := r.createResource(ctx, tj, pod); err != nil {
-				failed <- err
-				return
-			}
-			<-running
-			completed <- true
-		}()
-	}
-
-	var err error
-	ret := false
-	for i := 0; i < count; i++ {
-		select {
-		case err = <-failed:
-			ret = true
-		case <-completed:
 		}
+	} else {
+		if containsString(tj.ObjectMeta.Finalizers, finalizerName) {
+			// do before delete
+			tj.ObjectMeta.Finalizers = removeString(tj.ObjectMeta.Finalizers, finalizerName)
+			if err := r.Update(ctx, tj); err != nil {
+				return true, err
+			}
+		}
+		return false, nil
 	}
-	return ret, err
+	return false, nil
 }
 
 func (r *TJobReconciler) updateStatus(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
-	taskStatuses := r.getTaskStatus(ctx, tj, ctrlPods)
-	status := tv1.TJobStatus{
+	tj.Status = tv1.TJobStatus{
 		Phase:          getTJobPhase(tj),
 		StartTime:      getTJobStartTime(tj),
 		CompletionTime: getTJobCompleteTime(tj),
-		Tasks:          taskStatuses,
+		Tasks:          r.getTaskStatus(ctx, tj, ctrlPods),
 	}
-	slog.Println(tj.Status)
-	if !reflect.DeepEqual(status, tj.Status) {
-		slog.Println("not equal")
-		tj.Status = status
-		if err := r.Status().Update(ctx, tj); err != nil {
-			if apierrors.IsConflict(err) {
-				return false, nil
-			}
-		}
-	}
-	return false, nil
-}
-
-func (r *TJobReconciler) createService(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
-	var svcs corev1.ServiceList
-	if err := r.List(ctx, &svcs, client.InNamespace(tj.Namespace), client.MatchingFields{ctrlRefKey: tj.Name}); err != nil {
-		return true, err
-	}
-	for _, pod := range ctrlPods.Items {
-		svc := buildService(pod)
-		if err := r.Get(ctx, client.ObjectKeyFromObject(svc), &corev1.Service{}); err == nil {
-			continue
-		}
-		if err := ctrl.SetControllerReference(tj, svc, r.Scheme); err != nil {
-			continue
-		}
-		err := r.createResource(ctx, tj, svc)
-		if err != nil {
-			return true, err
-		}
-	}
-	return false, nil
-}
-
-func (r *TJobReconciler) createConfigMap(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
-	if err := r.Get(ctx, types.NamespacedName{Name: tj.Name, Namespace: tj.Namespace}, &corev1.ConfigMap{}); err != nil && apierrors.IsNotFound(err) {
-		cm := buildConfigMap(tj, ctrlPods)
-		if cm == nil {
-			return false, nil
-		}
-		if err := ctrl.SetControllerReference(tj, cm, r.Scheme); err != nil {
-			return true, err
-		}
-		err = r.createResource(ctx, tj, cm)
+	if err := r.Status().Update(ctx, tj); err != nil {
 		if apierrors.IsConflict(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return false, nil
-}
-
-func (r *TJobReconciler) releasePods(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
-	releaseTask := func(taskName string) {
-		for i, pod := range ctrlPods.Items {
-			if taskName == getTaskName(tj.Name, pod.Name) {
-				if isCoordContainerRunning(&ctrlPods.Items[i]) {
-					r.execInPod(tj.Namespace, pod.Name, coordContainerName, []string{"touch", "goon"})
-				}
-			}
-		}
-	}
-
-	// coordinate ensure pod run in the defined order
-	if tj.Status.Phase == tv1.Starting {
-		for _, task := range tj.Spec.Tasks {
-			releaseTask(task.Name)
 			return true, nil
 		}
+		return true, err
 	}
 	return false, nil
 }
@@ -336,6 +217,163 @@ func (r *TJobReconciler) getTaskStatus(ctx context.Context, tj *tv1.TJob, ctrlPo
 	return ts
 }
 
+func (r *TJobReconciler) cleanPods(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
+	// clean pod surplus
+	//ct := map[string]int{}
+	//for i, pod := range ctrlPods.Items {
+	//	n := getTaskName(tj.Name, pod.Name)
+	//	ct[n] += 1
+	//	if ct[n] > getTaskSpecByName(tj, n).Replicas {
+	//		slog.Println("do delete")
+	//		r.deleteResource(ctx, tj, &ctrlPods.Items[i])
+	//	}
+	//}
+
+	if needCleanPods(tj) && len(ctrlPods.Items) > 1 {
+		if _, exists := r.cache.Get(deleteCacheKey); exists {
+			slog.Println("delete pod cache")
+			return true, nil
+		}
+		if err := r.DeleteAllOf(ctx, &corev1.Pod{}, client.InNamespace(tj.Namespace), client.MatchingFields{ctrlRefKey: tj.Name}); err != nil {
+			slog.Println("do clean")
+			r.cache.Set(deleteCacheKey, "0")
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *TJobReconciler) createPods(ctx context.Context, tj *tv1.TJob) (bool, error) {
+	for i, task := range tj.Spec.Tasks {
+		diff := task.Replicas
+		if tj.Status.Tasks[task.Name] != nil {
+			diff = task.Replicas - len(tj.Status.Tasks[task.Name].Refs)
+		}
+		if diff > 0 {
+			slog.Println("diff", diff)
+			if _, exists := r.cache.Get(createCacheKey); exists {
+				slog.Println("cache do not create")
+				return true, nil
+			}
+			if ret, err := r.createPodsBatch(ctx, tj, tj.Spec.Tasks[i], diff); ret {
+				r.cache.Set(createCacheKey, "0")
+				return true, err
+			}
+		} else if diff < 0 {
+			//TODO(k)
+		}
+	}
+	return false, nil
+}
+
+func (r *TJobReconciler) createPodsBatch(ctx context.Context, tj *tv1.TJob, ts *tv1.TaskSpec, diff int) (bool, error) {
+	running := make(chan bool, 10)
+	completed := make(chan bool, diff)
+	failed := make(chan error, diff)
+	defer close(running)
+	defer close(completed)
+	defer close(failed)
+
+	for i := 0; i < diff; i++ {
+		running <- true
+		go func() {
+			pod := buildPodTemplate(tj, ts)
+			if err := r.createResourceWithCtrl(ctx, tj, pod); err != nil {
+				failed <- err
+				return
+			}
+			<-running
+			completed <- true
+		}()
+	}
+
+	var err error
+	ret := false
+	for i := 0; i < diff; i++ {
+		select {
+		case err = <-failed:
+			ret = true
+		case <-completed:
+		}
+	}
+	return ret, err
+}
+
+func (r *TJobReconciler) constructNetwork(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
+	if tj.Spec.Intranet == tv1.Service {
+		slog.Println("do create svc")
+		if ret, err := r.createService(ctx, tj, ctrlPods); ret {
+			return true, err
+		}
+	} else if tj.Spec.Intranet == tv1.HostNetwork {
+		//TODO(k)
+	}
+	return false, nil
+}
+
+func (r *TJobReconciler) createService(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
+	var svcs corev1.ServiceList
+	if err := r.List(ctx, &svcs, client.InNamespace(tj.Namespace), client.MatchingFields{ctrlRefKey: tj.Name}); err != nil {
+		return true, err
+	}
+	if len(svcs.Items) == len(ctrlPods.Items) {
+		return false, nil
+	}
+	for _, pod := range ctrlPods.Items {
+		svc := buildService(pod)
+		if err := r.Get(ctx, client.ObjectKeyFromObject(svc), &corev1.Service{}); err == nil {
+			continue
+		} else if err != nil {
+			return true, err
+		}
+		if err := r.createResourceWithCtrl(ctx, tj, svc); err != nil {
+			return true, err
+		}
+	}
+	return false, nil
+}
+
+func (r *TJobReconciler) generateJobConfig(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
+	if isAllPodsReady(tj, ctrlPods) {
+		r.createConfigMap(ctx, tj, ctrlPods)
+	}
+	return false, nil
+}
+
+func (r *TJobReconciler) createConfigMap(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
+	if err := r.Get(ctx, types.NamespacedName{Name: tj.Name, Namespace: tj.Namespace}, &corev1.ConfigMap{}); err != nil && apierrors.IsNotFound(err) {
+		cm := buildConfigMap(tj, ctrlPods)
+		if cm == nil {
+			return false, nil
+		}
+		if err := r.createResourceWithCtrl(ctx, tj, cm); err != nil {
+			return true, err
+		}
+	}
+	return false, nil
+}
+
+func (r *TJobReconciler) runPods(ctx context.Context, tj *tv1.TJob, ctrlPods *corev1.PodList) (bool, error) {
+	releaseTask := func(taskName string) {
+		for i, pod := range ctrlPods.Items {
+			if taskName == getTaskName(tj.Name, pod.Name) {
+				if isCoordContainerRunning(&ctrlPods.Items[i]) {
+					r.execInPod(tj.Namespace, pod.Name, coordContainerName, coordContainerRelease)
+				}
+			}
+		}
+	}
+
+	// coordinate ensure pod run in the defined order
+	if tj.Status.Phase == tv1.Starting {
+		for _, task := range tj.Spec.Tasks {
+			releaseTask(task.Name)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *TJobReconciler) deleteResource(ctx context.Context, robj runtime.Object, obj client.Object) error {
 	if obj.GetDeletionTimestamp() != nil {
 		return nil
@@ -349,6 +387,16 @@ func (r *TJobReconciler) deleteResource(ctx context.Context, robj runtime.Object
 	return nil
 }
 
+func (r *TJobReconciler) createResourceWithCtrl(ctx context.Context, tj *tv1.TJob, obj client.Object) error {
+	if err := ctrl.SetControllerReference(tj, obj, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.createResource(ctx, tj, obj); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *TJobReconciler) createResource(ctx context.Context, tj *tv1.TJob, obj client.Object) error {
 	tp := obj.GetObjectKind().GroupVersionKind().Kind
 	if err := r.Create(ctx, obj); err != nil {
@@ -358,27 +406,6 @@ func (r *TJobReconciler) createResource(ctx context.Context, tj *tv1.TJob, obj c
 	r.Recorder.Event(tj, corev1.EventTypeNormal, "Created", fmt.Sprintf("created %s %s", tp, obj.GetName()))
 	return nil
 
-}
-
-func (r *TJobReconciler) finalize(ctx context.Context, tj *tv1.TJob) (bool, error) {
-	if tj.ObjectMeta.DeletionTimestamp.IsZero() {
-		if !containsString(tj.ObjectMeta.Finalizers, finalizerName) {
-			tj.ObjectMeta.Finalizers = append(tj.ObjectMeta.Finalizers, finalizerName)
-			if err := r.Update(ctx, tj); err != nil {
-				return true, err
-			}
-		}
-	} else {
-		if containsString(tj.ObjectMeta.Finalizers, finalizerName) {
-			// do before delete
-			tj.ObjectMeta.Finalizers = removeString(tj.ObjectMeta.Finalizers, finalizerName)
-			if err := r.Update(ctx, tj); err != nil {
-				return true, err
-			}
-		}
-		return false, nil
-	}
-	return false, nil
 }
 
 func (r *TJobReconciler) execInPod(namespace string, podName string, containerName string, cmd []string) error {

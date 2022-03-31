@@ -5,12 +5,12 @@ metadata:
 spec:
   tasks:
   - name: tt
-    replicas: 10
+    replicas: 5
     template:
       spec:
         containers:
           - name: test
-            image: centos:7
+            image: registry.baidubce.com/kuizhiqing/centos:7
             imagePullPolicy: Always
             command:
             - sleep

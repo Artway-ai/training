@@ -30,15 +30,16 @@ var (
 	coordContainerCpu   = "10m"
 	coordContainerMem   = "10m"
 	PodNameKey          = "pod-name-key"
-	coordContainerImage = "busybox:1"
+	coordContainerImage = "registry.baidubce.com/kuizhiqing/centos:7"
 )
 
 const (
-	HOST_PORT_NUM = 2
+	servicePortsNum = 2
 )
 
 var (
-	coordContainerCmd = []string{"sh", "-c", "while true; do if [ -f goon ]; then exit 0; else sleep 0.1; fi; done"}
+	coordContainerCmd     = []string{"sh", "-c", "while true; do if [ -f goon ]; then exit 0; else sleep 0.1; fi; done"}
+	coordContainerRelease = []string{"touch", "goon"}
 )
 
 // status related
@@ -207,7 +208,7 @@ func getTJobCompleteTime(tj *tv1.TJob) *metav1.Time {
 
 func buildService(pod corev1.Pod) *corev1.Service {
 	var ports = []corev1.ServicePort{}
-	for i := 0; i < HOST_PORT_NUM; i++ {
+	for i := 0; i < servicePortsNum; i++ {
 		ports = append(ports, corev1.ServicePort{
 			Name: fmt.Sprintf("p-%d", i),
 			Port: int32(8000 + i),
