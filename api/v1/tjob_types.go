@@ -71,9 +71,9 @@ const (
 type StartPolicy string
 
 const (
-	StartAlways    StartPolicy = "Always"
-	StartRunning   StartPolicy = "Running"
-	StartSucceeded StartPolicy = "Succeeded"
+	StartImmediately    StartPolicy = "Immediately"
+	StartAfterRunning   StartPolicy = "AfterRunning"
+	StartAfterSucceeded StartPolicy = "AfterSucceeded"
 )
 
 type TaskSpec struct {
@@ -131,6 +131,7 @@ type TJobSpec struct {
 	Tasks []*TaskSpec `json:"tasks,omitempty"`
 
 	// Framework defines the framework of the job
+	// +optional
 	Framework *string `json:"framework,omitempty"`
 
 	// StartPolicy indicates how the tasks in the list start depend on previous status

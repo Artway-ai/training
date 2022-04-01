@@ -1,0 +1,26 @@
+apiVersion: training.artway.ai/v1
+kind: TJob
+metadata:
+  name: paddel-resnet
+spec:
+  framework: paddle
+  tasks:
+  - name: paddle-collective
+    replicas: 2
+    template:
+      spec:
+        containers:
+          - name: paddle
+            image: registry.baidubce.com/paddle-operator/demo-resnet:new-launch
+            command: ["python","-m","paddle.distributed.launch","train_demo.py"]
+            imagePullPolicy: Always
+            volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm
+            resources:
+              limits:
+                nvidia.com/gpu: 2
+        volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory

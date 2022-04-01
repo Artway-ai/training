@@ -3,8 +3,22 @@ kind: TJob
 metadata:
   name: tjob-sample
 spec:
+  startPolicy: AfterRunning
+  intranet: Service
   tasks:
   - name: tt
+    replicas: 3
+    template:
+      spec:
+        containers:
+          - name: test
+            image: registry.baidubce.com/kuizhiqing/centos:7
+            imagePullPolicy: Always
+            command:
+            - sleep
+            args:
+            - 1d
+  - name: kk
     replicas: 5
     template:
       spec:

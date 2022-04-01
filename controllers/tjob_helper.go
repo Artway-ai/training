@@ -16,30 +16,39 @@ package controllers
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 
 	tv1 "github.com/artway-ai/training/api/v1"
 )
 
-var (
-	coordContainerName  = "init"
-	coordContainerCpu   = "10m"
-	coordContainerMem   = "10m"
-	PodNameKey          = "pod-name-key"
-	coordContainerImage = "registry.baidubce.com/kuizhiqing/centos:7"
-)
-
 const (
-	servicePortsNum = 2
+	servicePortsNum           = 2
+	initContainerName         = "init"
+	initContainerCpu          = "10m"
+	initContainerMem          = "10m"
+	podNameKey                = "pod-name-key"
+	initContainerImageKey     = "INIT_IMAGE"
+	defaultInitContainerImage = "docker.io/library/busybox:1"
 )
 
 var (
-	coordContainerCmd     = []string{"sh", "-c", "while true; do if [ -f goon ]; then exit 0; else sleep 0.1; fi; done"}
-	coordContainerRelease = []string{"touch", "goon"}
+	initContainerCmd     = []string{"sh", "-c", "while true; do if [ -f goon ]; then exit 0; else sleep 0.1; fi; done"}
+	initContainerRelease = []string{"touch", "goon"}
+
+	initContainerImage = func() string {
+		e, ok := os.LookupEnv(initContainerImageKey)
+		if ok {
+			return e
+		} else {
+			return defaultInitContainerImage
+		}
+	}()
 )
 
 // status related
@@ -49,8 +58,8 @@ func getTaskName(tjobName, podName string) string {
 	s := strings.TrimPrefix(podName, tjobName)
 	return s[1 : len(s)-6]
 }
-func getPodGenerateName(tjobName, taskName string) string {
-	return fmt.Sprintf("%s-%s-", tjobName, taskName)
+func generatePodName(tjobName, taskName string) string {
+	return fmt.Sprintf("%s-%s-%s", tjobName, taskName, utilrand.String(5))
 }
 
 func getTaskSpecByName(tj *tv1.TJob, taskName string) (res *tv1.TaskSpec) {
@@ -168,22 +177,22 @@ func isPodRealRuning(pod *corev1.Pod) bool {
 	return true
 }
 
-func isAllCoordContainerRunning(ctrlPods corev1.PodList) bool {
+func isAllInitContainerRunning(ctrlPods corev1.PodList) bool {
 	for i, _ := range ctrlPods.Items {
-		if !isCoordContainerRunning(&ctrlPods.Items[i]) {
+		if !isInitContainerRunning(&ctrlPods.Items[i]) {
 			return false
 		}
 	}
 	return true
 }
 
-func isCoordContainerRunning(pod *corev1.Pod) bool {
+func isInitContainerRunning(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodPending {
 		return false
 	}
 	for i := range pod.Status.InitContainerStatuses {
 		container := pod.Status.InitContainerStatuses[i]
-		if container.Name == coordContainerName && container.State.Running != nil {
+		if container.Name == initContainerName && container.State.Running != nil {
 			return true
 		}
 	}
@@ -223,7 +232,7 @@ func buildService(pod corev1.Pod) *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Ports: ports,
 			Selector: map[string]string{
-				PodNameKey: pod.Name,
+				podNameKey: pod.Name,
 			},
 			ClusterIP: "None",
 		},
@@ -253,7 +262,7 @@ func getTaskSpecMap(tj *tv1.TJob) map[string]*tv1.TaskSpec {
 }
 
 func buildPodTemplate(tj *tv1.TJob, ts *tv1.TaskSpec) (pod *corev1.Pod) {
-	//name := tj.Spec.TaskSpec.Template
+	name := generatePodName(tj.Name, ts.Name)
 
 	pod = &corev1.Pod{}
 
@@ -263,18 +272,18 @@ func buildPodTemplate(tj *tv1.TJob, ts *tv1.TaskSpec) (pod *corev1.Pod) {
 	if pod.ObjectMeta.Labels == nil {
 		pod.ObjectMeta.Labels = map[string]string{}
 	}
-	pod.ObjectMeta.Labels["label"] = ts.Name
+	pod.ObjectMeta.Labels[podNameKey] = name
 
 	if pod.ObjectMeta.Annotations == nil {
 		pod.ObjectMeta.Annotations = map[string]string{}
 	}
-	pod.ObjectMeta.Annotations["annotation"] = ts.Name
+	pod.ObjectMeta.Annotations["task-name"] = ts.Name
 
-	pod.ObjectMeta.GenerateName = getPodGenerateName(tj.Name, ts.Name)
+	pod.ObjectMeta.Name = name
 	pod.ObjectMeta.Namespace = tj.Namespace
 
-	pod.Spec.Hostname = ts.Name
-	pod.Spec.Subdomain = ts.Name
+	pod.Spec.Hostname = name
+	pod.Spec.Subdomain = name
 
 	envcm := corev1.EnvFromSource{
 		ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -285,14 +294,14 @@ func buildPodTemplate(tj *tv1.TJob, ts *tv1.TaskSpec) (pod *corev1.Pod) {
 	}
 
 	coInit := corev1.Container{
-		Name:            coordContainerName,
-		Image:           coordContainerImage,
+		Name:            initContainerName,
+		Image:           initContainerImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         coordContainerCmd,
+		Command:         initContainerCmd,
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse(coordContainerCpu),
-				corev1.ResourceMemory: resource.MustParse(coordContainerMem),
+				corev1.ResourceCPU:    resource.MustParse(initContainerCpu),
+				corev1.ResourceMemory: resource.MustParse(initContainerMem),
 				//corev1.ResourceEphemeralStorage: resource.MustParse(),
 			},
 		},
@@ -310,6 +319,7 @@ func buildPodTemplate(tj *tv1.TJob, ts *tv1.TaskSpec) (pod *corev1.Pod) {
 
 func buildConfigMap(tj *tv1.TJob, ctrlPods *corev1.PodList) (cm *corev1.ConfigMap) {
 	envs := map[string][]string{}
+	hosts := []string{}
 
 	for _, pod := range ctrlPods.Items {
 		if len(strings.Split(pod.Status.PodIP, ".")) != 4 {
@@ -317,6 +327,7 @@ func buildConfigMap(tj *tv1.TJob, ctrlPods *corev1.PodList) (cm *corev1.ConfigMa
 		}
 		tn := getTaskName(tj.Name, pod.Name)
 		envs[tn] = append(envs[tn], fmt.Sprintf("%s:%d", pod.Status.PodIP, 8888))
+		hosts = append(hosts, pod.Status.PodIP)
 	}
 
 	cm = &corev1.ConfigMap{
@@ -327,12 +338,23 @@ func buildConfigMap(tj *tv1.TJob, ctrlPods *corev1.PodList) (cm *corev1.ConfigMa
 			Namespace:   tj.Namespace,
 		},
 		Data: map[string]string{
-			"TEST_KEY": "TEST_VALUE",
+			"TJOB_NAME": tj.Name,
 		},
 	}
 
 	for _, task := range tj.Spec.Tasks {
-		cm.Data["ENDPOINTS"] = strings.Join(envs[task.Name], ",")
+		tn := strings.ReplaceAll(task.Name, "-", "_")
+		envKey := fmt.Sprintf("%s_ENDPOINTS", strings.ToUpper(tn))
+		cm.Data[envKey] = strings.Join(envs[task.Name], ",")
 	}
+	cm.Data["TJOB_ENDPOINTS"] = strings.Join(hosts, ",")
+
+	// paddle
+	if tj.Spec.Framework != nil && *tj.Spec.Framework == "paddle" {
+		cm.Data["PADDLE_JOB_ID"] = tj.Name
+		cm.Data["PADDLE_MASTER"] = fmt.Sprintf("%s:8090", hosts[0])
+		cm.Data["PADDLE_NNODES"] = fmt.Sprintf("%d", len(hosts))
+	}
+
 	return cm
 }
