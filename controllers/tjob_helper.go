@@ -349,11 +349,20 @@ func buildConfigMap(tj *tv1.TJob, ctrlPods *corev1.PodList) (cm *corev1.ConfigMa
 	}
 	cm.Data["TJOB_ENDPOINTS"] = strings.Join(hosts, ",")
 
-	// paddle
+	// TODO(kuizhiqing) handle the following section
+
 	if tj.Spec.Framework != nil && *tj.Spec.Framework == "paddle" {
 		cm.Data["PADDLE_JOB_ID"] = tj.Name
 		cm.Data["PADDLE_MASTER"] = fmt.Sprintf("%s:8090", hosts[0])
 		cm.Data["PADDLE_NNODES"] = fmt.Sprintf("%d", len(hosts))
+	}
+
+	if tj.Spec.Framework != nil && *tj.Spec.Framework == "torch" {
+		cm.Data["PET_RDZV_ID"] = tj.Name
+		cm.Data["PET_RDZV_BACKEND"] = "c10d"
+		cm.Data["PET_RDZV_ENDPOINT"] = fmt.Sprintf("%s", hosts[0])
+		cm.Data["PET_NPROC_PER_NODE"] = "auto"
+		cm.Data["PET_NNODES"] = fmt.Sprintf("%d", len(hosts))
 	}
 
 	return cm
