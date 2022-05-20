@@ -11,10 +11,22 @@ spec:
     kind: TJob
     listKind: TJobList
     plural: tjobs
+    shortNames:
+    - tj
     singular: tjob
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Status
+      type: string
+    - jsonPath: .spec.framework
+      name: Framework
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: TJob is the Schema for the tjobs API

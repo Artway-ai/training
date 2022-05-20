@@ -363,6 +363,12 @@ func buildConfigMap(tj *tv1.TJob, ctrlPods *corev1.PodList) (cm *corev1.ConfigMa
 		cm.Data["PET_RDZV_ENDPOINT"] = fmt.Sprintf("%s", hosts[0])
 		cm.Data["PET_NPROC_PER_NODE"] = "auto"
 		cm.Data["PET_NNODES"] = fmt.Sprintf("%d", len(hosts))
+
+		// PET_RDZV_CONF=
+		// PET_STANDALONE=
+		// PET_MAX_RESTARTS
+		// PET_MONITOR_INTERVAL
+		// PET_START_METHOD
 	}
 
 	return cm

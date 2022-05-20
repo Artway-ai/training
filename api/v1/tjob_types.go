@@ -163,7 +163,11 @@ type TJobStatus struct {
 }
 
 //+kubebuilder:object:root=true
+//+kubebuilder:resource:shortName=tj
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.phase`
+//+kubebuilder:printcolumn:name="Framework",type=string,JSONPath=`.spec.framework`
+//+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // TJob is the Schema for the tjobs API
 type TJob struct {
